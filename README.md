@@ -19,7 +19,7 @@ The goal of this project is to understand and demonstrate how transformer langua
 
 ```
 .
-├── minigpt.py      # model, training and generation
+├── main.py      # model, training and generation
 ├── plot_loss.py    # plots the training curve from loss_log.csv
 ├── loss_log.csv    # created during training
 ├── loss_curve.png  # created by plot_loss.py
@@ -39,13 +39,13 @@ pip install torch matplotlib
 ### Train
 
 ```bash
-python minigpt.py train --steps 3000
+python main.py train --steps 3000
 ```
 
 If no dataset is given, the script downloads the Tiny Shakespeare corpus automatically. To use your own text, pass a plain-text file:
 
 ```bash
-python minigpt.py train --data my_text.txt --steps 3000
+python main.py train --data my_text.txt --steps 3000
 ```
 
 Useful options:
@@ -63,7 +63,7 @@ Useful options:
 On a CPU-only machine, a smaller model trains faster:
 
 ```bash
-python minigpt.py train --n_layer 4 --n_embd 128 --steps 2000
+python main.py train --n_layer 4 --n_embd 128 --steps 2000
 ```
 
 ### Generate text
