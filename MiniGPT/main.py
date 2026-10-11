@@ -12,6 +12,7 @@ DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tiny
 CKPT = "minigpt.pt"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+
 # ---------------- Model ---------------- #
 class CausalSelfAttention(nn.Module):
     def __init__(self, n_embd, n_head, block_size, dropout):
@@ -22,7 +23,7 @@ class CausalSelfAttention(nn.Module):
         self.proj = nn.Linear(n_embd, n_embd)
         self.drop = nn.Dropout(dropout)
         mask = torch.tril(torch.ones(block_size, block_size))
-        self.register_buffer("mask", mask.view(1,1,block_size,block_size))
+        self.register_buffer("mask", mask.view(1, 1, block_size, block_size))
 
     def forward(self, x):
         B, T, C = x.shape
@@ -35,6 +36,7 @@ class CausalSelfAttention(nn.Module):
         y = (att @ v).transpose(1, 2).contiguous().view(B, T, C)
         return self.drop(self.proj(y))
 
+
 class Block(nn.Module):
     def __init__(self, n_embd, n_head, block_size, dropout):
         super().__init__()
@@ -43,14 +45,15 @@ class Block(nn.Module):
         self.ln2 = nn.LayerNorm(n_embd)
         self.mpl = nn.Sequential(
             nn.Linear(n_embd, 4 * n_embd),
-            nn.GLU(),
+            nn.GELU(),
             nn.Linear(4 * n_embd, n_embd),
             nn.Dropout(dropout)
         )
 
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
-        return x + self.mpl(self.lnl2(x))
+        return x + self.mpl(self.ln2(x))
+
 
 class MiniGPT(nn.Module):
     def __init__(self, vocab_size, block_size=128, n_embd=192, n_head=6, n_layer=6, dropout=0.1):
@@ -73,7 +76,7 @@ class MiniGPT(nn.Module):
     def forward(self, idx, targets=None):
         B, T = idx.shape
         pos = torch.arange(T, device=idx.device)
-        x = self.tok_emb(idx) + self.pos_emb(pos)
+        x = self.tom_emb(idx) + self.pos_emb(pos)
         logits = self.head(self.ln_f(self.blocks(x)))
         loss = None
         if targets is not None:
@@ -92,4 +95,107 @@ class MiniGPT(nn.Module):
             idx = torch.cat([idx, nxt], dim=1)
         return idx
 
+
 # ---------------- Data ---------------- #
+def load_text(path):
+    if not os.path.exists(path):
+        print(f"Downloading sample dataset to {path}......")
+        urllib.request.urlretrieve(DATA_URL, path)
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def get_batch(data, block_size, batch_size):
+    ix = torch.randint(len(data) - block_size - 1, (batch_size,))
+    x = torch.stack([data[i:i + block_size] for i in ix])
+    y = torch.stack([data[i + 1:i + block_size + 1] for i in ix])
+    return x.to(device), y.to(device)
+
+
+@torch.no_grad
+def estimate_loss(model, splits, block_size, batch_size, iters=20):
+    model.eval()
+    out = {}
+    for name, d in splits.items():
+        losses = [model(*get_batch(d, block_size, batch_size))[1].item() for _ in range(iters)]
+        out[name] = sum(losses) / len(losses)
+    model.train()
+    return out
+
+
+# ---------------- Commands ---------------- #
+def train(args):
+    text = load_text(args.data)
+    chars = sorted(set(text))
+    stoi = {c: i for i, c in enumerate(chars)}
+    data = torch.tensor([stoi[c] for c in text], dtype=torch.long)
+    n = int(0.9 * len(data))
+    splits = {"train": data[:n], "val": data[n:]}
+
+    cfg = dict(vocab_size=len(chars), block_size=args.block_size, n_embd=args.n_embd,
+               n_head=args.n_head, n_layer=args.n_layer, dropout=0.1)
+    model = MiniGPT(**cfg).to(device)
+    print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters on {device}")
+
+    history = []
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    for step in range(args.steps + 1):
+        lr = args.lr * 0.5 * (1 + math.cos(math.pi * step / args.steps))  # cosine decay
+        for g in opt.param_groups:
+            g["lr"] = lr
+        if step % 250 == 0:
+            l = estimate_loss(model, splits, args.block_size, args.batch_size)
+            print(f"step {step:5d} | train {l['train']:.3f} | val {l['val']:.3f}")
+            history.append((step, l["train"], l["val"]))
+
+        with open("loss_log.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["steps","train", "val"])
+            w.writerows(history)
+
+        xb, yb = get_batch(splits["train"], args.block_size, args.batch_size)
+        _, loss = model(xb, yb)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
+        opt.step()
+    torch.save({"model": model.state_dict(),"cfg": cfg, "chars": chars}, CKPT)
+    print(f"Saved {CKPT}")
+
+def generate(args):
+    ck = torch.load(CKPT, map_location=device)
+    chars = ck["chars"]
+    stoi = {c: i for i, c in enumerate(chars)}
+    model = MiniGPT(**ck["cfg"]).to(device)
+    model.load_state_dict(ck["model"])
+    model.eval()
+    ids = [stoi[c] for c in args.prompt if c in stoi] or [0]
+    idx = torch.tensor([ids], device=device)
+    out = model.generate(idx, args.tokens, args.temperature, args.top_k)[0].tolist()
+    print("".join(chars[i] for i in out))
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    t = sub.add_parser("train")
+    t.add_argument("--data", default="input.txt")
+    t.add_argument("--steps", type=int, default=3000)
+    t.add_argument("--batch_size", type=int, default=64)
+    t.add_argument("--block_size", type=int, default=128)
+    t.add_argument("--n_embd", type=int, default=192)
+    t.add_argument("--n_head", type=int, default=6)
+    t.add_argument("--n_layer", type=int, default=6)
+    t.add_argument("--lr", type=float, default=3e-4)
+    t.set_defaults(fn=train)
+
+    g = sub.add_parser("generate")
+    g.add_argument("--prompt", default="\n")
+    g.add_argument("--tokens", type=int, default=300)
+    g.add_argument("--temperature", type=float, default=0.8)
+    g.add_argument("--top_k", type=int, default=40)
+    g.set_defaults(fn=generate)
+
+    a = p.parse_args()
+    a.fn(a)
