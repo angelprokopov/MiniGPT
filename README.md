@@ -90,7 +90,7 @@ python minigpt.py generate --prompt "ROMEO:" --tokens 400 --temperature 0.8 --to
 
 ### Training curve
 
-![Training and validation loss](loss_curve.png)
+![Training and validation loss](MiniGPT/loss_curve.png)
 
 | Run | Layers | Embedding | Steps | Final train loss | Final val loss |
 |---|---|---|---|---|---|
