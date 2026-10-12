@@ -157,7 +157,7 @@ def train(args):
         _, loss = model(xb, yb)
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
     torch.save({"model": model.state_dict(),"cfg": cfg, "chars": chars}, CKPT)
     print(f"Saved {CKPT}")
